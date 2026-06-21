@@ -3,15 +3,30 @@ from flask_cors import CORS
 import json
 import datetime
 import os
-from vercel_kv import kv
+import redis
 
 app = Flask(__name__)
 CORS(app)
+
+def get_redis_client():
+    try:
+        redis_url = os.environ.get("UPSTASH_REDIS_REST_URL")
+        if not redis_url:
+            redis_url = "redis://localhost:6379"
+        return redis.from_url(redis_url)
+    except Exception as e:
+        print(f"Erreur de connexion Redis: {e}")
+        return None
+
+redis_client = get_redis_client()
 
 @app.route('/api/check', methods=['POST'])
 def check_commands():
     """L'agent vient chercher des commandes"""
     try:
+        if not redis_client:
+            return jsonify({'error': 'Redis not connected'}), 500
+        
         data = request.json
         agent_id = data.get('agent_id')
         
@@ -19,12 +34,12 @@ def check_commands():
             return jsonify({'error': 'agent_id required'}), 400
         
         key = f"agent:{agent_id}"
-        existing = kv.get(key)
+        existing = redis_client.get(key)
         
         if not existing:
             return jsonify({'error': 'Agent not found'}), 404
         
-        agent_data = json.loads(existing)
+        agent_data = json.loads(existing.decode('utf-8'))
         
         # Mettre à jour le timestamp
         agent_data['last_seen'] = datetime.datetime.now().isoformat()
@@ -34,7 +49,7 @@ def check_commands():
         agent_data['commands'] = []  # Vider après lecture
         
         # Sauvegarder
-        kv.set(key, json.dumps(agent_data))
+        redis_client.set(key, json.dumps(agent_data))
         
         return jsonify({'commands': commands})
     except Exception as e:
