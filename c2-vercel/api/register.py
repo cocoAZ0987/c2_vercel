@@ -3,15 +3,31 @@ from flask_cors import CORS
 import json
 import datetime
 import os
-from vercel_kv import kv
+import redis
 
 app = Flask(__name__)
 CORS(app)
+
+# Connexion à Upstash Redis
+def get_redis_client():
+    try:
+        redis_url = os.environ.get("UPSTASH_REDIS_REST_URL")
+        if not redis_url:
+            redis_url = "redis://localhost:6379"
+        return redis.from_url(redis_url)
+    except Exception as e:
+        print(f"Erreur de connexion Redis: {e}")
+        return None
+
+redis_client = get_redis_client()
 
 @app.route('/api/register', methods=['POST'])
 def register_agent():
     """Enregistre un nouvel agent"""
     try:
+        if not redis_client:
+            return jsonify({'error': 'Redis not connected'}), 500
+        
         data = request.json
         agent_id = data.get('agent_id')
         info = data.get('info', {})
@@ -21,10 +37,10 @@ def register_agent():
             return jsonify({'error': 'agent_id required'}), 400
         
         key = f"agent:{agent_id}"
-        existing = kv.get(key)
+        existing = redis_client.get(key)
         
         if existing:
-            agent_data = json.loads(existing)
+            agent_data = json.loads(existing.decode('utf-8'))
         else:
             agent_data = {
                 'commands': [],
@@ -40,12 +56,11 @@ def register_agent():
         agent_data['ip'] = ip
         
         # Sauvegarder
-        kv.set(key, json.dumps(agent_data))
+        redis_client.set(key, json.dumps(agent_data))
         
         return jsonify({
             'status': 'registered', 
-            'agent_id': agent_id,
-            'message': 'Agent registered successfully'
+            'agent_id': agent_id
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
